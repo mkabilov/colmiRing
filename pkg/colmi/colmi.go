@@ -86,6 +86,10 @@ func (c *Ring) Scan(addrs ...string) (bluetooth.Address, error) {
 	var btAddr bluetooth.Address
 	errCh := make(chan error)
 
+	for i := range addrs {
+		addrs[i] = strings.ToLower(addrs[i])
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), btScanTimeout)
 	defer cancel()
 
