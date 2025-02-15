@@ -189,7 +189,7 @@ func (c *Ring) heartrateLogPacket() []byte {
 }
 
 func (c *Ring) BlinkTwice() error {
-	if _, err := c.rxCh.Write(c.blinkTwicePacket()); err != nil {
+	if err := c.Write(c.blinkTwicePacket()); err != nil {
 		return fmt.Errorf("could not write command: %v", err)
 	}
 
@@ -286,7 +286,7 @@ func (c *Ring) HeartRateLog() (map[time.Time]int, []time.Time, error) {
 
 	go c.heartLogProcessor(ctx, &heartbeatLog, doneCh)
 
-	if _, err := c.rxCh.Write(c.heartrateLogPacket()); err != nil {
+	if err := c.Write(c.heartrateLogPacket()); err != nil {
 		return heartbeatLog, timestamps, fmt.Errorf("could not write command: %v", err)
 	}
 
