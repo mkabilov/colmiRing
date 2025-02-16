@@ -19,13 +19,7 @@ func (h heartRateLogStartTime) data() {
 }
 
 func newHeartRateLogStartTime(resp []byte) heartRateLogStartTime {
-	val := int64(0)
-	val += int64(resp[5]) * 16777216
-	val += int64(resp[4]) * 65536
-	val += int64(resp[3]) * 256
-	val += int64(resp[2])
-
-	return heartRateLogStartTime(time.Unix(val, 0).UTC())
+	return heartRateLogStartTime(bytesToDate(resp))
 }
 
 type heartRateLogEntry struct {

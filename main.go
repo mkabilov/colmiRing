@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"tinygo.org/x/bluetooth"
 
@@ -9,8 +10,8 @@ import (
 )
 
 const (
-	darwinAddr = "<insert your device address here (e.g. 12345678-b13a-7b74-e878-445cb7fc95b5)>"
-	linuxAddr  = "<insert your device here too (e.g. 12:34:45:67:e5:04)>"
+	darwinAddr = "4b917133-b13a-7b74-e878-445cb7fc95b5"
+	linuxAddr  = "30:31:44:36:e5:04"
 )
 
 func main() {
@@ -26,11 +27,13 @@ func main() {
 		panic(err)
 	}
 
-	heartbeatLog, keys, err := ring.HeartRateLog()
+	heartbeatLog, keys, err := ring.HeartRateLog(time.Now())
 	if err != nil {
 		panic(err)
 	}
 	for _, key := range keys {
 		fmt.Printf("%v: %d\n", key, heartbeatLog[key])
 	}
+
+	ring.Disconnect()
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	btScanTimeout    = 30 * time.Second
+	btScanTimeout    = 10 * time.Second
 	btConnectTimeout = 10 * time.Second
 	logsFetchTimeout = 10 * time.Second
 
@@ -56,6 +57,7 @@ type Ring struct {
 	firstPacketReceived bool
 	chunks              chan payload
 	currentChunkID      int //since command sent
+	expectedChunks      *int
 
 	btDev   bluetooth.Device
 	adapter *bluetooth.Adapter
@@ -85,10 +87,6 @@ func (c *Ring) Init() error {
 func (c *Ring) Scan(addrs ...string) (bluetooth.Address, error) {
 	var btAddr bluetooth.Address
 	errCh := make(chan error)
-
-	for i := range addrs {
-		addrs[i] = strings.ToLower(addrs[i])
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), btScanTimeout)
 	defer cancel()
@@ -186,10 +184,8 @@ func (c *Ring) blinkTwicePacket() []byte {
 	return makePacket(cmdBlinkTwice, []byte{})
 }
 
-func (c *Ring) heartrateLogPacket() []byte {
-	// the sequence is to fetch the data from the very beginning of the ring log
-	// supposedly it is the timestamp from which fetch data from
-	return makePacket(cmdHeartRateLog, []byte{0x00, 0xD9, 0xAF, 0x67})
+func (c *Ring) heartrateLogPacket(startTime time.Time) []byte {
+	return makePacket(cmdHeartRateLog, dateToBytes(truncateToDay(startTime)))
 }
 
 func (c *Ring) BlinkTwice() error {
@@ -201,7 +197,7 @@ func (c *Ring) BlinkTwice() error {
 }
 
 func (c *Ring) processData(data []byte) {
-	log.Printf("received data: %v", data)
+	log.Printf("data: %v", data)
 
 	switch c.currentOperation {
 	case cmdHeartRateLog:
@@ -221,8 +217,10 @@ func (c *Ring) processData(data []byte) {
 		switch hbIndex {
 		case 0:
 			c.chunks <- heartRateLogInterval(data[3])
+			chunks := int(data[2]) - 1 // excluding this chunk
+			c.expectedChunks = &chunks
 		case 1:
-			c.chunks <- newHeartRateLogStartTime(data)
+			c.chunks <- newHeartRateLogStartTime(data[2:6])
 			c.chunks <- heartRateLogEntry{
 				idx: 1,
 				seq: data[6:15],
@@ -233,14 +231,15 @@ func (c *Ring) processData(data []byte) {
 				seq: data[2:15],
 			}
 		}
-		if c.currentChunkID == expectedHeartRateLogEntries {
+		if !(c.expectedChunks == nil || c.currentChunkID < *c.expectedChunks) {
 			c.chunks <- HeartRateLogEnd{}
 		}
 	}
 }
 
 func (c *Ring) heartLogProcessor(ctx context.Context, heartbeatLog *map[time.Time]int, done chan struct{}) {
-	bufChunks := [40][]byte{}
+	bufChunks := make(map[int][]byte)
+	maxChunkID := 0
 	var (
 		startTime   time.Time
 		intervalMin int
@@ -252,7 +251,7 @@ ForLoop:
 		case chunk := <-c.chunks:
 			switch v := chunk.(type) {
 			case HeartRateLogStart:
-				bufChunks = [40][]byte{}
+				clear(bufChunks)
 				clear(*heartbeatLog)
 			case heartRateLogStartTime:
 				startTime = time.Time(v)
@@ -260,6 +259,7 @@ ForLoop:
 				intervalMin = int(v)
 			case heartRateLogEntry:
 				bufChunks[v.idx] = v.seq
+				maxChunkID = int(math.Max(float64(maxChunkID), float64(v.idx)))
 			case HeartRateLogEnd:
 				break ForLoop
 			}
@@ -269,7 +269,7 @@ ForLoop:
 	}
 
 	offset := time.Duration(0)
-	for i := 0; i < 23; i++ {
+	for i := 0; i <= maxChunkID; i++ {
 		for _, v := range bufChunks[i] {
 			(*heartbeatLog)[startTime.Add(offset)] = int(v)
 			offset += time.Duration(intervalMin) * time.Minute
@@ -278,9 +278,8 @@ ForLoop:
 	close(done)
 }
 
-func (c *Ring) HeartRateLog() (map[time.Time]int, []time.Time, error) {
+func (c *Ring) HeartRateLog(startTime time.Time) (map[time.Time]int, []time.Time, error) {
 	heartbeatLog := make(map[time.Time]int)
-	timestamps := make([]time.Time, 0)
 
 	c.currentOperation = cmdHeartRateLog
 	c.firstPacketReceived = false
@@ -290,8 +289,8 @@ func (c *Ring) HeartRateLog() (map[time.Time]int, []time.Time, error) {
 
 	go c.heartLogProcessor(ctx, &heartbeatLog, doneCh)
 
-	if err := c.Write(c.heartrateLogPacket()); err != nil {
-		return heartbeatLog, timestamps, fmt.Errorf("could not write command: %v", err)
+	if err := c.Write(c.heartrateLogPacket(startTime)); err != nil {
+		return nil, nil, err
 	}
 
 	select {
@@ -301,7 +300,7 @@ func (c *Ring) HeartRateLog() (map[time.Time]int, []time.Time, error) {
 	}
 
 	ts := make([]time.Time, 0)
-	for t, _ := range heartbeatLog {
+	for t := range heartbeatLog {
 		ts = append(ts, t)
 	}
 	sort.Slice(ts, func(i, j int) bool {
